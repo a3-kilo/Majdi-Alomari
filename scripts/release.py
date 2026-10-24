@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Prepare the public, static GitHub Pages artifact from the editable site folder."""
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import quote, urljoin
 from urllib.request import Request, urlopen
 from xml.sax.saxutils import escape
 import argparse, html, json, os, re, shutil
@@ -79,8 +79,17 @@ def main():
             seo = (f'\n    <link rel="canonical" href="{html.escape(url,quote=True)}"/>'
                    f'\n    <meta property="og:url" content="{html.escape(url,quote=True)}"/>')
             if rel=='404.html':
-                seo += f'\n    <base href="{html.escape(base,quote=True)}"/>'
-                seo += '\n    <meta name="robots" content="noindex,follow"/>'
+                # GitHub serves this page at whatever missing URL was requested.
+                # Absolute site URLs keep its CSS, script, icons and navigation
+                # working even several folders deep.
+                def rebase_404_link(match):
+                    value = html.unescape(match.group(3))
+                    if value.startswith(('#', 'http:', 'https:', 'mailto:', 'tel:', 'data:')):
+                        return match.group(0)
+                    absolute = urljoin(base, value)
+                    return match.group(1) + match.group(2) + '="' + html.escape(absolute, quote=True) + '"' + match.group(4)
+                body = re.sub(r'(<(?:a|link|script)\b[^>]*?\s)(href|src)="([^"]*)"([^>]*>)',
+                              rebase_404_link, body, flags=re.I)
             if rel=='index.html':
                 seo += ('\n    <script type="application/ld+json">'
                         + json.dumps({'@context':'https://schema.org','@type':'WebSite','name':'Dr. Majdi M. Alomari','url':base}, separators=(',',':'))

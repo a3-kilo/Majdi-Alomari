@@ -163,6 +163,22 @@
     }
     // Folder routes work on a web server, but a file:// browser doesn't serve
     // a directory's index.html automatically. Rewrite only for offline viewing.
+    // Resolve every internal link against the page where it was authored.
+    // The header survives page changes; unmodified relative links would otherwise
+    // point into the new URL's folder (for example /research/publications/).
+    function stabilizeInternalLinks(root = document, sourceUrl = location.href) {
+        qa('a[href]', root).forEach(link => {
+            const raw = link.getAttribute('href');
+            if (!raw || raw.startsWith('#') || /^(?:mailto:|tel:|data:|javascript:)/i.test(raw)) return;
+            let url;
+            try { url = new URL(raw, sourceUrl); }
+            catch { return; }
+            if (url.origin !== siteRoot.origin || !url.pathname.startsWith(siteRoot.pathname)) return;
+            // Set an absolute location so the destination cannot change after
+            // history.pushState modifies the document's base URL.
+            link.href = url.href;
+        });
+    }
     function enableLocalFileLinks(root = document) {
         if (location.protocol !== 'file:') return;
         qa('a[href]', root).forEach(link => {
@@ -244,8 +260,8 @@
         if (cache.has(key))
             return cache.get(key);
         const task = fetch(url.href, { credentials: 'same-origin' }).then(async (r) => { if (!r.ok)
-            throw Error('HTTP ' + r.status); const text = await r.text(); const doc = new DOMParser().parseFromString(text, 'text/html'); if (!q('main#main', doc))
-            throw Error('No main element'); return doc; }).catch(err => { cache.delete(key); throw err; });
+            throw Error('HTTP ' + r.status); const text = await r.text(); const doc = new DOMParser().parseFromString(text, 'text/html'); if (!q('main#main', doc) || q('.not-found', doc))
+            throw Error('Unexpected missing page at ' + url.pathname); return doc; }).catch(err => { cache.delete(key); throw err; });
         cache.set(key, task);
         return task;
     }
@@ -291,6 +307,7 @@
                 if (seq !== routeSerial)
                     return;
                 const mounted = document.importNode(incoming, true);
+                stabilizeInternalLinks(mounted, url.href);
                 reusePortrait(mounted);
                 current.replaceWith(mounted);
                 updateHead(doc);
@@ -348,6 +365,7 @@
         if ('serviceWorker' in navigator)
             addEventListener('load', () => navigator.serviceWorker.register(new URL('sw.js', siteRoot).href, {scope: siteRoot.pathname}).catch(() => { }), { once: true });
     }
+    stabilizeInternalLinks();
     enableLocalFileLinks();
     prepareImages();
     trackPortrait();
