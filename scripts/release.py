@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Prepare the public, static GitHub Pages artifact from the editable site folder."""
 from pathlib import Path
-from urllib.parse import quote, urljoin
+from urllib.parse import urljoin
 from urllib.request import Request, urlopen
 from xml.sax.saxutils import escape
 import argparse, html, json, os, re, shutil
@@ -16,17 +16,21 @@ ORIGINALS = {
 }
 
 
+PRIMARY_DOMAIN = 'majdialomari.com'
+
+
 def get_public_base():
-    full = os.getenv('GITHUB_REPOSITORY', '').strip()
+    """Only publish the verified public domain, never an incidental GitHub URL."""
     cname = SITE / 'CNAME'
-    if cname.exists() and cname.read_text().strip():
-        return 'https://' + cname.read_text().strip().removeprefix('https://').rstrip('/') + '/'
-    if not full or '/' not in full:
-        return None
-    owner, repo = full.split('/', 1)
-    if repo.casefold() == f'{owner}.github.io'.casefold():
-        return f'https://{owner}.github.io/'
-    return f'https://{owner}.github.io/{quote(repo)}/'
+    if not cname.is_file():
+        raise SystemExit('Missing site/CNAME. Refusing to publish a GitHub-based sitemap.')
+    domain = cname.read_text(encoding='utf8').strip().lower()
+    if domain != PRIMARY_DOMAIN:
+        raise SystemExit(
+            f'site/CNAME must contain {PRIMARY_DOMAIN!r}, not {domain!r}. '
+            'Production SEO URLs must use the public domain.'
+        )
+    return f'https://{PRIMARY_DOMAIN}/'
 
 
 def obtain(source, dest, magic, strict):
@@ -55,7 +59,7 @@ def main():
     shutil.copytree(SITE, DEST)
     base = None if args.preview else get_public_base()
     if not args.preview and not base:
-        raise SystemExit('Set GITHUB_REPOSITORY or a site/CNAME domain before production build.')
+        raise SystemExit('Missing site/CNAME for the production domain.')
     for name, (url, filename, magic) in ORIGINALS.items():
         original = SITE / 'assets' / filename
         target = DEST / 'assets' / filename
@@ -94,6 +98,21 @@ def main():
                 seo += ('\n    <script type="application/ld+json">'
                         + json.dumps({'@context':'https://schema.org','@type':'WebSite','name':'Dr. Majdi M. Alomari','url':base}, separators=(',',':'))
                         + '</script>')
+            # Connect existing biographical Person metadata to one stable entity.
+            # No visible content, titles, or bibliographic statements are changed.
+            if rel in ('index.html', 'profile/index.html'):
+                def link_person(match):
+                    payload = json.loads(html.unescape(match.group(2)))
+                    if payload.get('@type') != 'Person':
+                        return match.group(0)
+                    payload['@id'] = base + '#person'
+                    payload['url'] = base
+                    payload['alternateName'] = ['Majdi Alomari', 'Dr. Majdi Alomari']
+                    return match.group(1) + '\n' + json.dumps(payload, ensure_ascii=False, indent=2) + '\n' + match.group(3)
+                body = re.sub(
+                    r'(<script type="application/ld\+json">)(.*?)(</script>)',
+                    link_person, body, flags=re.S
+                )
             body = body.replace('</head>', seo + '\n  </head>', 1)
             # WhatsApp, LinkedIn and other crawlers need an absolute public image
             # URL. A file:// or a relative image URL will not appear in previews.

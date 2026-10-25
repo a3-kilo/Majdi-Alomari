@@ -17,10 +17,29 @@ class Scan(HTMLParser):
     def handle_endtag(self,tag):
         if tag=='title':self.in_title=False
         if tag=='script' and self.in_json:self.in_json=False;self.json.append(self.buffer)
-errors=[];urls=set();count=0;all_titles=set()
+BASE = 'https://majdialomari.com/'
+SOCIAL_IMAGE = BASE + 'assets/majdi-portrait-original.jpg'
+errors=[];urls=set();count=0;all_titles=set();canonical_by_path={}
+
 for f in [*ROOT.rglob('index.html'),ROOT/'404.html']:
     count+=1;s=Scan();s.feed(f.read_text(encoding='utf8'))
     attrs=s.attrs
+    rel=f.relative_to(ROOT).as_posix()
+    expected_url=BASE+('' if rel=='index.html' else ('404.html' if rel=='404.html' else rel[:-10]))
+    canonical_by_path[rel]=expected_url
+    canonical_values=[a.get('href','') for tag,a in attrs if tag=='link' and a.get('rel')=='canonical']
+    if canonical_values != [expected_url]:
+        errors.append(f'{rel}: expected one canonical {expected_url}, got {canonical_values}')
+    og_urls=[a.get('content','') for tag,a in attrs if tag=='meta' and a.get('property')=='og:url']
+    if og_urls != [expected_url]:
+        errors.append(f'{rel}: Open Graph URL disagrees with canonical: {og_urls}')
+    if rel=='404.html':
+        if not any(tag=='meta' and a.get('name')=='robots' and 'noindex' in a.get('content','') for tag,a in attrs):
+            errors.append('404 is missing noindex')
+    else:
+        og_images=[a.get('content','') for tag,a in attrs if tag=='meta' and a.get('property')=='og:image']
+        if og_images != [SOCIAL_IMAGE]:
+            errors.append(f'{rel}: social image should be hosted on the main domain')
     for tag,a in attrs:
         for key in ('href','src'):
             value=a.get(key,'')
@@ -34,16 +53,30 @@ for f in [*ROOT.rglob('index.html'),ROOT/'404.html']:
             urls.add(url)
         if tag=='meta' and a.get('name')=='description' and len(a.get('content',''))>185:errors.append(f'{f}: long meta description')
     for blob in s.json:
-        try:json.loads(blob)
+        try:
+            structured=json.loads(blob)
+            if rel in ('index.html','profile/index.html') and structured.get('@type')=='Person':
+                if structured.get('url')!=BASE or structured.get('@id')!=BASE+'#person':
+                    errors.append(f'{rel}: Person metadata is not linked to the primary domain')
         except Exception:errors.append(f'{f}: invalid structured data')
     if f.name=='index.html':
         if s.title in all_titles: errors.append(f'duplicate title {s.title}')
         all_titles.add(s.title)
 if (ROOT/'sitemap.xml').exists():
     sitemap=ET.parse(ROOT/'sitemap.xml')
-    n=sum(1 for x in sitemap.getroot().iter() if x.tag.endswith('loc'))
+    entries=[x.text for x in sitemap.getroot().iter() if x.tag.endswith('loc')]
+    n=len(entries)
     if n!=48:errors.append(f'Expected 48 sitemap routes, got {n}')
+    indexed_urls={url for name,url in canonical_by_path.items() if name!='404.html'}
+    if len(entries)!=len(set(entries)) or set(entries)!=indexed_urls:
+        errors.append('Sitemap URLs must match all and only indexable canonical URLs')
+    if any(not (u or '').startswith(BASE) or 'github.io' in (u or '') for u in entries):
+        errors.append('Sitemap contains non-primary-domain URLs')
 else:errors.append('Missing sitemap.xml')
+robots=ROOT/'robots.txt'
+if not robots.exists() or f'Sitemap: {BASE}sitemap.xml' not in robots.read_text(encoding='utf8'):
+    errors.append('robots.txt must advertise the primary-domain sitemap')
+
 # GitHub Pages serves 404.html at the *missing URL*, so asset/link
 # references must not resolve relative to that unknown nested directory.
 from urllib.parse import urljoin
