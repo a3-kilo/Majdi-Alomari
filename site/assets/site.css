@@ -1709,6 +1709,13 @@ main#main {
     font-size: 25px;
   }
 }
+@media(max-width:400px) {
+  .identity-word small {
+    max-width: calc(100vw - 175px);
+    white-space: normal;
+    line-height: 1.25;
+  }
+}
 @media(prefers-reduced-motion:reduce) {
   .nav-underline,[data-inview],.featured,.project-item,.publication {
     animation: none!important;
