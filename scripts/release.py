@@ -94,25 +94,67 @@ def main():
                     return match.group(1) + match.group(2) + '="' + html.escape(absolute, quote=True) + '"' + match.group(4)
                 body = re.sub(r'(<(?:a|link|script)\b[^>]*?\s)(href|src)="([^"]*)"([^>]*>)',
                               rebase_404_link, body, flags=re.I)
-            if rel=='index.html':
+            if rel == 'index.html':
+                # One coherent, domain-level site name (not keyword variants).
+                website = {
+                    '@context': 'https://schema.org',
+                    '@type': 'WebSite',
+                    '@id': base + '#website',
+                    'url': base,
+                    'name': 'Dr. Majdi M. Alomari',
+                    'alternateName': 'Majdi Alomari',
+                    'inLanguage': 'en',
+                    'about': {'@id': base + '#person'},
+                }
                 seo += ('\n    <script type="application/ld+json">'
-                        + json.dumps({'@context':'https://schema.org','@type':'WebSite','name':'Dr. Majdi M. Alomari','url':base}, separators=(',',':'))
+                        + json.dumps(website, ensure_ascii=False, separators=(',', ':'))
                         + '</script>')
-            # Connect existing biographical Person metadata to one stable entity.
-            # No visible content, titles, or bibliographic statements are changed.
-            if rel in ('index.html', 'profile/index.html'):
-                def link_person(match):
-                    payload = json.loads(html.unescape(match.group(2)))
-                    if payload.get('@type') != 'Person':
-                        return match.group(0)
-                    payload['@id'] = base + '#person'
-                    payload['url'] = base
-                    payload['alternateName'] = ['Majdi Alomari', 'Dr. Majdi Alomari']
-                    return match.group(1) + '\n' + json.dumps(payload, ensure_ascii=False, indent=2) + '\n' + match.group(3)
-                body = re.sub(
-                    r'(<script type="application/ld\+json">)(.*?)(</script>)',
-                    link_person, body, flags=re.S
-                )
+
+            # Associate the homepage, Profile and each publication with the
+            # same academic identity, without editing visible text or titles.
+            person_id = base + '#person'
+
+            def connect_identity(match):
+                payload = json.loads(html.unescape(match.group(2)))
+                kind = payload.get('@type')
+
+                def person_identity(person):
+                    if not isinstance(person, dict) or person.get('@type') != 'Person':
+                        return
+                    if person.get('name') != 'Majdi M. Alomari':
+                        return
+                    person['@id'] = person_id
+                    person['url'] = base
+                    person['alternateName'] = ['Majdi Alomari', 'Dr. Majdi Alomari']
+                    person['image'] = base + 'assets/majdi-portrait-original.jpg'
+
+                if kind == 'Person':
+                    person_identity(payload)
+                elif kind == 'ProfilePage' and rel == 'profile/index.html':
+                    payload['@id'] = url + '#webpage'
+                    payload['url'] = url
+                    payload['isPartOf'] = {'@id': base + '#website'}
+                    person_identity(payload.get('mainEntity'))
+                elif kind in ('ScholarlyArticle', 'Chapter', 'Book') and rel.startswith('papers/'):
+                    payload['@id'] = url + '#publication'
+                    payload['url'] = url
+                    payload['mainEntityOfPage'] = {'@id': url}
+                    authors = payload.get('author', [])
+                    if isinstance(authors, dict):
+                        authors = [authors]
+                    for author in authors:
+                        if isinstance(author, dict) and author.get('@type') == 'Person' and author.get('name') == 'Majdi M. Alomari':
+                            author['@id'] = person_id
+                else:
+                    return match.group(0)
+                return (match.group(1) + '\n'
+                        + json.dumps(payload, ensure_ascii=False, indent=2)
+                        + '\n' + match.group(3))
+
+            body = re.sub(
+                r'(<script type="application/ld\+json">)(.*?)(</script>)',
+                connect_identity, body, flags=re.S,
+            )
             body = body.replace('</head>', seo + '\n  </head>', 1)
             # WhatsApp, LinkedIn and other crawlers need an absolute public image
             # URL. A file:// or a relative image URL will not appear in previews.

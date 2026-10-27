@@ -20,6 +20,10 @@ class Scan(HTMLParser):
 BASE = 'https://majdialomari.com/'
 SOCIAL_IMAGE = BASE + 'assets/majdi-portrait-original.jpg'
 errors=[];urls=set();count=0;all_titles=set();canonical_by_path={}
+identity_count = 0
+publication_count = 0
+website_count = 0
+profile_count = 0
 
 for f in [*ROOT.rglob('index.html'),ROOT/'404.html']:
     count+=1;s=Scan();s.feed(f.read_text(encoding='utf8'))
@@ -54,14 +58,45 @@ for f in [*ROOT.rglob('index.html'),ROOT/'404.html']:
         if tag=='meta' and a.get('name')=='description' and len(a.get('content',''))>185:errors.append(f'{f}: long meta description')
     for blob in s.json:
         try:
-            structured=json.loads(blob)
-            if rel in ('index.html','profile/index.html') and structured.get('@type')=='Person':
-                if structured.get('url')!=BASE or structured.get('@id')!=BASE+'#person':
-                    errors.append(f'{rel}: Person metadata is not linked to the primary domain')
-        except Exception:errors.append(f'{f}: invalid structured data')
+            structured = json.loads(blob)
+        except Exception:
+            errors.append(f'{f}: invalid structured data')
+            continue
+        kind = structured.get('@type')
+        if kind == 'WebSite':
+            website_count += 1
+            if rel != 'index.html' or structured.get('@id') != BASE + '#website' or structured.get('url') != BASE:
+                errors.append(f'{rel}: WebSite identity is inconsistent')
+            if structured.get('name') != 'Dr. Majdi M. Alomari' or structured.get('alternateName') != 'Majdi Alomari':
+                errors.append(f'{rel}: WebSite name mismatch')
+        if kind == 'ProfilePage':
+            profile_count += 1
+            if rel != 'profile/index.html' or structured.get('url') != expected_url:
+                errors.append(f'{rel}: incorrect profile-page URL')
+            person = structured.get('mainEntity', {})
+            if person.get('@id') != BASE + '#person' or person.get('name') != 'Majdi M. Alomari':
+                errors.append(f'{rel}: profile does not identify the homepage Person')
+        if kind == 'Person' and rel != '404.html':
+            identity_count += 1
+            if structured.get('@id') != BASE + '#person' or structured.get('url') != BASE:
+                errors.append(f'{rel}: Person identity is inconsistent')
+        if rel.startswith('papers/'):
+            publication_count += 1
+            if kind not in ('ScholarlyArticle', 'Chapter', 'Book'):
+                errors.append(f'{rel}: unexpected publication schema type')
+            if structured.get('@id') != expected_url + '#publication' or structured.get('url') != expected_url:
+                errors.append(f'{rel}: publication URL mismatch')
+            authors = structured.get('author', [])
+            if isinstance(authors, dict):
+                authors = [authors]
+            matching = [a for a in authors if isinstance(a, dict) and a.get('name') == 'Majdi M. Alomari']
+            if len(matching) != 1 or matching[0].get('@id') != BASE + '#person':
+                errors.append(f'{rel}: publication author is not linked to the same Person')
     if f.name=='index.html':
         if s.title in all_titles: errors.append(f'duplicate title {s.title}')
         all_titles.add(s.title)
+if website_count != 1 or profile_count != 1 or publication_count != 44 or identity_count != 3:
+    errors.append(f'Identity coverage mismatch: website={website_count}, profile={profile_count}, publications={publication_count}, person={identity_count}')
 if (ROOT/'sitemap.xml').exists():
     sitemap=ET.parse(ROOT/'sitemap.xml')
     entries=[x.text for x in sitemap.getroot().iter() if x.tag.endswith('loc')]
