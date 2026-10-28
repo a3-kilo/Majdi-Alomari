@@ -3,6 +3,8 @@
 from pathlib import Path
 from urllib.parse import urljoin
 from urllib.request import Request, urlopen
+from io import BytesIO
+from time import sleep
 from xml.sax.saxutils import escape
 import argparse, html, json, os, re, shutil
 
@@ -14,6 +16,11 @@ ORIGINALS = {
     'university': ('https://edugate.au.edu.kw/au/resources/barcelona-layout/images/ack.webp', 'au-official-logo.webp', b'RIFF'),
     'kfas': ('https://www.kfas.org.kw/image/logo_c.png', 'kfas-official-logo.png', b'\x89PNG\r\n\x1a\n'),
 }
+
+# An earlier successful release already hosts the approved source images.
+# Prefer those stable copies to avoid depending on temporary outages at
+# the university, research foundation, or portrait hosts during deployment.
+PUBLISHED_ASSET_BASE = 'https://majdialomari.com/assets/'
 
 
 PRIMARY_DOMAIN = 'majdialomari.com'
@@ -98,21 +105,58 @@ def get_public_base():
     return f'https://{PRIMARY_DOMAIN}/'
 
 
-def obtain(source, dest, magic, strict):
-    if dest.exists() and dest.stat().st_size > 1000 and dest.read_bytes().startswith(magic):
-        return
-    req = Request(source, headers={'User-Agent': 'Mozilla/5.0', 'Accept': 'image/*'})
+def image_is_valid(data, magic):
+    """Reject HTML error pages, empty responses, or corrupt image downloads."""
+    if len(data) < 1000 or not data.startswith(magic):
+        return False
     try:
-        with urlopen(req, timeout=25) as response:
-            data = response.read(14_000_000)
-        if len(data) < 1000 or not data.startswith(magic):
-            raise ValueError('Incorrect image type or empty asset')
-        dest.write_bytes(data)
-    except Exception as error:
-        if strict:
-            raise SystemExit(f'Could not fetch {dest.name}. Add the approved original image to site/assets/ and deploy again. Error: {error}')
-        print(f'Asset not locally available for preview: {dest.name}')
+        from PIL import Image
+        with Image.open(BytesIO(data)) as candidate:
+            candidate.verify()
+        return True
+    except Exception:
+        return False
+
+
+def obtain(source, dest, magic, strict):
+    """Use approved, unmodified images; survive temporary source-server errors."""
+    if dest.is_file() and image_is_valid(dest.read_bytes(), magic):
         return
+    if dest.exists():
+        dest.unlink()
+
+    # The existing live site's file is the exact approved asset published by
+    # a prior successful build. Never replace it with an unrelated logo.
+    candidates = (PUBLISHED_ASSET_BASE + dest.name, source)
+    failures = []
+    for url in candidates:
+        for attempt in range(2):
+            try:
+                req = Request(url, headers={
+                    'User-Agent': 'Mozilla/5.0 (compatible; MajdiAlomariSiteBuilder/1.0)',
+                    'Accept': 'image/avif,image/webp,image/png,image/jpeg,image/*;q=0.8',
+                    'Cache-Control': 'no-cache',
+                })
+                with urlopen(req, timeout=22) as response:
+                    data = response.read(14_000_001)
+                if not image_is_valid(data, magic):
+                    raise ValueError('the response was not a valid original image')
+                dest.write_bytes(data)
+                print(f'Approved asset ready: {dest.name} (source: {url})')
+                return
+            except Exception as error:
+                failures.append(f'{url}: {error}')
+                if attempt == 0:
+                    sleep(1.0)
+    if strict:
+        raise SystemExit(
+            f'Unable to obtain the approved image {dest.name}. '
+            f'For a permanent fix, save the authentic file to '
+            f'site/assets/{dest.name} and commit it. '
+            f'Attempted the published-site copy and the original source. '
+            f'Details: {"; ".join(failures)}'
+        )
+    print(f'Asset not locally available for preview: {dest.name}')
 
 
 def main():
