@@ -1,4 +1,4 @@
-const CACHE = 'majdi-academic-v16-photo-refresh';
+const CACHE = 'majdi-academic-v17-repo-original-portrait';
 const CORE = [
   './',
   './research/',

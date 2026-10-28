@@ -22,6 +22,14 @@ ORIGINALS = {
 # the university, research foundation, or portrait hosts during deployment.
 PUBLISHED_ASSET_BASE = 'https://majdialomari.com/assets/'
 
+# The approved, full-quality original files are already committed at the
+# repository root. Always use them before checking older published copies or
+# third-party hosts. Do not resize, convert, or recompress them for the site.
+REPOSITORY_ORIGINALS = {
+    'portrait': ROOT / 'Majdi Alomari - Photo (1).jpg',
+    'university': ROOT / 'AU Logo.webp',
+}
+
 
 PRIMARY_DOMAIN = 'majdialomari.com'
 SOCIAL_FILENAME = 'majdi-social-preview-v2.jpg'
@@ -127,7 +135,15 @@ def obtain(source, dest, magic, strict):
 
     # The existing live site's file is the exact approved asset published by
     # a prior successful build. Never replace it with an unrelated logo.
-    candidates = (PUBLISHED_ASSET_BASE + dest.name, source)
+    repository_urls = {
+        'majdi-portrait-original.jpg': 'https://raw.githubusercontent.com/a3-kilo/Majdi-Alomari/main/Majdi%20Alomari%20-%20Photo%20%281%29.jpg',
+        'au-official-logo.webp': 'https://raw.githubusercontent.com/a3-kilo/Majdi-Alomari/main/AU%20Logo.webp',
+    }
+    candidates = tuple(dict.fromkeys(
+        candidate for candidate in (
+            repository_urls.get(dest.name), PUBLISHED_ASSET_BASE + dest.name, source
+        ) if candidate
+    ))
     failures = []
     for url in candidates:
         for attempt in range(2):
@@ -172,7 +188,17 @@ def main():
     for name, (url, filename, magic) in ORIGINALS.items():
         original = SITE / 'assets' / filename
         target = DEST / 'assets' / filename
-        if original.exists():
+        committed = REPOSITORY_ORIGINALS.get(name)
+        if committed is not None and committed.is_file():
+            data = committed.read_bytes()
+            if not image_is_valid(data, magic):
+                raise SystemExit(
+                    f'The committed {committed.name} is not a valid {filename} image. '
+                    'Replace it with the original file; never use a preview screenshot.'
+                )
+            target.write_bytes(data)
+            print(f'Using committed original (no recompression): {committed.name} -> assets/{filename}')
+        elif original.is_file():
             shutil.copy2(original, target)
         if not args.preview:
             obtain(url, target, magic, strict=True)
