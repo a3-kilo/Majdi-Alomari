@@ -1,4 +1,4 @@
-const CACHE = 'majdi-academic-v15-routing';
+const CACHE = 'majdi-academic-v16-photo-refresh';
 const CORE = [
   './',
   './research/',
@@ -33,6 +33,22 @@ self.addEventListener('fetch', event => {
   const url = new URL(request.url);
   if (request.method !== 'GET' || url.origin !== self.location.origin) return;
   if (!url.pathname.startsWith(new URL('./', self.registration.scope).pathname)) return;
+
+  // Display the cached portrait immediately; check for an updated original
+  // in the background so future visits never get stuck with an older JPEG.
+  if (url.pathname.endsWith('/assets/majdi-portrait-original.jpg')) {
+    event.respondWith(caches.match(request).then(cached => {
+      const refreshed = fetch(request).then(response => {
+        if (response.ok) {
+          const copy = response.clone();
+          event.waitUntil(caches.open(CACHE).then(cache => cache.put(request, copy)));
+        }
+        return response;
+      }).catch(() => cached || Response.error());
+      return cached || refreshed;
+    }));
+    return;
+  }
 
   // Always look for updated pages, CSS and JS first, so a new deployment
   // cannot be held back by older cached navigation code.

@@ -18,7 +18,7 @@ class Scan(HTMLParser):
         if tag=='title':self.in_title=False
         if tag=='script' and self.in_json:self.in_json=False;self.json.append(self.buffer)
 BASE = 'https://majdialomari.com/'
-SOCIAL_IMAGE = BASE + 'assets/majdi-portrait-original.jpg'
+SOCIAL_IMAGE = BASE + 'assets/majdi-social-preview-v2.jpg'
 errors=[];urls=set();count=0;all_titles=set();canonical_by_path={}
 identity_count = 0
 publication_count = 0
@@ -44,6 +44,18 @@ for f in [*ROOT.rglob('index.html'),ROOT/'404.html']:
         og_images=[a.get('content','') for tag,a in attrs if tag=='meta' and a.get('property')=='og:image']
         if og_images != [SOCIAL_IMAGE]:
             errors.append(f'{rel}: social image should be hosted on the main domain')
+        for property_name, expected in (
+            ('og:image:secure_url', SOCIAL_IMAGE),
+            ('og:image:type', 'image/jpeg'),
+            ('og:image:width', '1200'),
+            ('og:image:height', '630'),
+        ):
+            values = [a.get('content', '') for tag, a in attrs if tag == 'meta' and a.get('property') == property_name]
+            if values != [expected]:
+                errors.append(f'{rel}: invalid {property_name}: {values}')
+        twitter = [a.get('content', '') for tag, a in attrs if tag == 'meta' and a.get('name') == 'twitter:image']
+        if twitter != [SOCIAL_IMAGE]:
+            errors.append(f'{rel}: twitter:image mismatch')
     for tag,a in attrs:
         for key in ('href','src'):
             value=a.get(key,'')
@@ -147,6 +159,24 @@ if base:
             expected = [base,base+'research/',base+'publications/',base+'profile/']
             if resolved != expected:
                 errors.append(f'Navigation broken: {rel}: {resolved}')
+from PIL import Image
+share = ROOT / 'assets' / 'majdi-social-preview-v2.jpg'
+portrait = ROOT / 'assets' / 'majdi-portrait-original.jpg'
+for image_path in (share, portrait):
+    if not image_path.exists():
+        errors.append(f'Missing image: {image_path.name}')
+    else:
+        try:
+            with Image.open(image_path) as image:
+                image.verify()
+        except Exception as error:
+            errors.append(f'Invalid image: {image_path.name}: {error}')
+if share.exists():
+    with Image.open(share) as image:
+        if image.size != (1200, 630) or image.format != 'JPEG':
+            errors.append('Social image must be a 1200x630 JPEG')
+    if share.stat().st_size > 590_000:
+        errors.append('Social preview must be below 590 KB')
 for file in ROOT.rglob('*'):
     if file.suffix in ('.docx','.md','.py','.env','.zip') or file.name in ('SOURCE_NOTES.md','README.md'):
         errors.append(f'Unexpected public source: {file.relative_to(ROOT)}')

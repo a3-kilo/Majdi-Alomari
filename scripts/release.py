@@ -17,6 +17,71 @@ ORIGINALS = {
 
 
 PRIMARY_DOMAIN = 'majdialomari.com'
+SOCIAL_FILENAME = 'majdi-social-preview-v2.jpg'
+SOCIAL_SIZE = (1200, 630)
+SOCIAL_LIMIT = 590_000
+
+
+def build_social_image(original, output):
+    """Generate a sharp, landscape social card from the unchanged source photo."""
+    from io import BytesIO
+    from PIL import Image, ImageDraw, ImageFont, ImageOps
+
+    with Image.open(original) as raw:
+        photo = ImageOps.exif_transpose(raw).convert('RGB')
+
+    # This is only a *display derivative* for social links. The webpage photo
+    # remains the exact source JPEG, byte-for-byte, without recompression.
+    card = Image.new('RGB', SOCIAL_SIZE, (248, 247, 244))
+    portrait_width = 640
+    target_h = SOCIAL_SIZE[1]
+    factor = max(portrait_width / photo.width, target_h / photo.height)
+    resized = photo.resize((round(photo.width * factor), round(photo.height * factor)), Image.Resampling.LANCZOS)
+    left = (resized.width - portrait_width) // 2
+    top = max(0, min(resized.height - target_h, round((resized.height - target_h) * 0.12)))
+    card.paste(resized.crop((left, top, left + portrait_width, top + target_h)), (0, 0))
+
+    draw = ImageDraw.Draw(card)
+    forest = (33, 59, 48)
+    muted = (88, 110, 97)
+    accent = (177, 138, 101)
+    x = 681
+    draw.line(((x, 150), (x, 208)), fill=accent, width=3)
+
+    def font(size, serif=False):
+        families = ([
+            '/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf',
+            '/usr/share/fonts/truetype/liberation2/LiberationSerif-Regular.ttf',
+        ] if serif else [
+            '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
+            '/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf',
+        ])
+        for path in families:
+            if Path(path).exists():
+                return ImageFont.truetype(path, size)
+        return ImageFont.load_default()
+
+    title_lines = ['Dr. Majdi M.', 'Alomari']
+    title_size = 58
+    while title_size > 32 and any(draw.textbbox((0, 0), line, font=font(title_size, True))[2] > 480 for line in title_lines):
+        title_size -= 2
+    title_font = font(title_size, True)
+    draw.text((x, 237), title_lines[0], font=title_font, fill=forest)
+    draw.text((x, 312), title_lines[1], font=title_font, fill=forest)
+    draw.text((x, 439), 'Associate Professor', font=font(26), fill=muted)
+    draw.text((x, 477), 'of Electrical Engineering', font=font(23), fill=muted)
+    draw.text((x, 570), 'AUSTRALIAN UNIVERSITY · KUWAIT', font=font(17), fill=forest)
+
+    for quality in (96, 93, 90, 87, 84, 80, 76):
+        data = BytesIO()
+        card.save(data, 'JPEG', quality=quality, subsampling=0, optimize=True)
+        if data.tell() <= SOCIAL_LIMIT:
+            output.write_bytes(data.getvalue())
+            break
+    else:
+        raise SystemExit('The share image could not be kept under the WhatsApp-friendly size limit.')
+    print(f'Original portrait: {photo.width}x{photo.height}; unchanged on the site. '
+          f'Social preview: {SOCIAL_SIZE[0]}x{SOCIAL_SIZE[1]}, {output.stat().st_size // 1024} KB.')
 
 
 def get_public_base():
@@ -67,6 +132,8 @@ def main():
             shutil.copy2(original, target)
         if not args.preview:
             obtain(url, target, magic, strict=True)
+    if base:
+        build_social_image(DEST / 'assets' / ORIGINALS['portrait'][1], DEST / 'assets' / SOCIAL_FILENAME)
     for page in [*DEST.rglob('index.html'), DEST/'404.html']:
         rel = page.relative_to(DEST).as_posix()
         depth = max(len(page.relative_to(DEST).parts)-1, 0)
@@ -158,7 +225,7 @@ def main():
             body = body.replace('</head>', seo + '\n  </head>', 1)
             # WhatsApp, LinkedIn and other crawlers need an absolute public image
             # URL. A file:// or a relative image URL will not appear in previews.
-            photo_url = base + 'assets/majdi-portrait-original.jpg'
+            photo_url = base + 'assets/' + SOCIAL_FILENAME
             body = re.sub(
                 r'(<meta\b[^>]*\bproperty="og:image"[^>]*\bcontent=")[^"]*(")',
                 lambda m: m.group(1) + html.escape(photo_url, quote=True) + m.group(2), body
@@ -171,6 +238,8 @@ def main():
             # the head and don't change the displayed page.
             social = ('\n    <meta property="og:image:secure_url" content="' + html.escape(photo_url, quote=True) + '"/>'
                       '\n    <meta property="og:image:type" content="image/jpeg"/>'
+                      '\n    <meta property="og:image:width" content="1200"/>'
+                      '\n    <meta property="og:image:height" content="630"/>'
                       '\n    <meta name="twitter:image" content="' + html.escape(photo_url, quote=True) + '"/>'
                       '\n    <meta name="twitter:image:alt" content="Dr. Majdi M. Alomari"/>')
             body = body.replace('</head>', social + '\n  </head>', 1)
